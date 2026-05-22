@@ -1,0 +1,18 @@
+# .dockerignore - keep the Docker image lean
+.working_dir/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.env
+*.mp4
+*.png
+*.jpg
+assets/
+tests/
+README*.md
+Communication.md
+TODO
+LICENSE
