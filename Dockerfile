@@ -3,14 +3,13 @@
 
 FROM python:3.12-slim AS base
 
-# Install system dependencies required by opencv, moviepy, etc.
+# Install system dependencies required by opencv-headless, moviepy, etc.
+# Note: libgl1-mesa-glx was replaced by libgl1 in Debian Trixie
+# Since we use opencv-python-headless, most GUI libs are not needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
     git \
     curl \
