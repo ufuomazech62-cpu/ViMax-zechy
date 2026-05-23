@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Optional
 import asyncio
 from google import genai
@@ -13,21 +14,58 @@ from utils.rate_limiter import RateLimiter
 class VideoGeneratorVeoGoogleAPI:
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
+        project: str = "",
+        location: str = "",
         t2v_model: str = "veo-3.1-generate-preview",
         ff2v_model: str = "veo-3.1-generate-preview",
         flf2v_model: str = "veo-3.1-generate-preview",
         rate_limiter: Optional[RateLimiter] = None,
     ):
         self.api_key = api_key
+        self.project = project
+        self.location = location
         self.t2v_model = t2v_model
         self.ff2v_model = ff2v_model
         self.flf2v_model = flf2v_model
         self.rate_limiter = rate_limiter
 
-        self.client = genai.Client(
-            api_key=api_key,
-        )
+        # Prefer Vertex AI when project is provided; fall back to API key
+        if self.project:
+            client_kwargs = {
+                "project": self.project,
+                "location": self.location or "us-central1",
+            }
+            logging.info(
+                "Veo: using Vertex AI (project=%s, location=%s)",
+                self.project, client_kwargs["location"],
+            )
+        else:
+            # Fall back to env vars if not passed explicitly
+            env_project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+            env_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+            env_key = os.environ.get("GOOGLE_API_KEY", "") or self.api_key
+
+            if env_project:
+                client_kwargs = {
+                    "project": env_project,
+                    "location": env_location,
+                }
+                logging.info(
+                    "Veo: using Vertex AI from env (project=%s, location=%s)",
+                    env_project, env_location,
+                )
+            elif env_key:
+                client_kwargs = {"api_key": env_key}
+                logging.info("Veo: using Google AI Studio API key")
+            else:
+                raise ValueError(
+                    "No Vertex AI project or Google API key configured. "
+                    "Set GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION for Vertex AI, "
+                    "or GOOGLE_API_KEY for AI Studio."
+                )
+
+        self.client = genai.Client(**client_kwargs)
     
     async def generate_single_video(
         self,

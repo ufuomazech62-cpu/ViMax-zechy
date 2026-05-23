@@ -44,25 +44,28 @@ async def lifespan(app: FastAPI):
     logger.info("ViMax server starting up...")
     logger.info(f"Config path: {CONFIG_PATH}")
 
-    # Check if API keys are configured
+    # Check if credentials are configured
     try:
         import yaml
         with open(CONFIG_PATH, "r") as f:
             config = yaml.safe_load(f)
 
-        chat_key = config.get("chat_model", {}).get("init_args", {}).get("api_key", "")
-        img_key = config.get("image_generator", {}).get("init_args", {}).get("api_key", "")
-        vid_key = config.get("video_generator", {}).get("init_args", {}).get("api_key", "")
+        has_vertex = bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
+        has_api_key = bool(os.environ.get("GOOGLE_API_KEY"))
 
-        # With google_genai provider, a single GOOGLE_API_KEY covers everything
-        has_google_key = bool(os.environ.get("GOOGLE_API_KEY"))
+        if not has_vertex and not has_api_key:
+            logger.warning(
+                "⚠️  No credentials configured. Set GOOGLE_CLOUD_PROJECT + "
+                "GOOGLE_CLOUD_LOCATION for Vertex AI, or GOOGLE_API_KEY for "
+                "AI Studio."
+            )
+        elif has_vertex:
+            project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+            location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+            logger.info(f"✅ Vertex AI configured: project={project}, location={location}")
+        else:
+            logger.info("✅ Google AI Studio API key configured")
 
-        if not chat_key and not os.environ.get("OPENROUTER_API_KEY") and not has_google_key:
-            logger.warning("⚠️  No chat model API key configured. Set GOOGLE_API_KEY env var.")
-        if not img_key and not has_google_key:
-            logger.warning("⚠️  No image generator API key configured. Set GOOGLE_API_KEY env var.")
-        if not vid_key and not has_google_key:
-            logger.warning("⚠️  No video generator API key configured. Set GOOGLE_API_KEY env var.")
     except Exception as e:
         logger.warning(f"Could not read config at startup: {e}")
 
@@ -71,9 +74,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ViMax API",
-    description="Agentic Video Generation API — powered by ViMax multi-agent pipeline",
-    version="0.1.0",
+    title="Visualiser API",
+    description="Agentic Video Generation API — powered by Visualiser multi-agent pipeline",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -120,12 +123,17 @@ def get_pipeline(config_path: str = None):
 
 
 def inject_env_api_keys():
-    """Inject API keys from environment variables into the config at runtime.
+    """Inject API credentials from environment variables into the config.
 
-    With the switch to Google Genai for chat, all three services (chat, image,
-    video) can share a single GOOGLE_API_KEY. The function still supports the
-    legacy VIMAX_CHAT_API_KEY / OPENROUTER_API_KEY env vars for backward
-    compatibility.
+    Supports two authentication modes:
+
+    1. **Vertex AI** (recommended for Cloud Run): Set ``GOOGLE_CLOUD_PROJECT``
+       and ``GOOGLE_CLOUD_LOCATION``. The Cloud Run service account handles
+       auth automatically — no API key needed.
+
+    2. **Google AI Studio**: Set ``GOOGLE_API_KEY`` as a fallback.
+       Legacy vars ``VIMAX_CHAT_API_KEY`` / ``OPENROUTER_API_KEY`` are also
+       supported for backward compatibility.
     """
     import yaml
 
@@ -135,32 +143,76 @@ def inject_env_api_keys():
 
     changed = False
 
-    # --- Chat model API key ---
-    # Priority: VIMAX_CHAT_API_KEY > OPENROUTER_API_KEY > GOOGLE_API_KEY
+    gcp_project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+    gcp_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+    # --- Vertex AI credentials ---
+    if gcp_project:
+        # Chat model (google_vertexai provider)
+        chat_args = config.get("chat_model", {}).get("init_args", {})
+        if not chat_args.get("project"):
+            chat_args["project"] = gcp_project
+            changed = True
+        if not chat_args.get("location"):
+            chat_args["location"] = gcp_location
+            changed = True
+
+        # Image generator
+        img_args = config.get("image_generator", {}).get("init_args", {})
+        if not img_args.get("project"):
+            img_args["project"] = gcp_project
+            changed = True
+        if not img_args.get("location"):
+            img_args["location"] = gcp_location
+            changed = True
+
+        # Video generator
+        vid_args = config.get("video_generator", {}).get("init_args", {})
+        if not vid_args.get("project"):
+            vid_args["project"] = gcp_project
+            changed = True
+        if not vid_args.get("location"):
+            vid_args["location"] = gcp_location
+            changed = True
+
+    # --- Google AI Studio API key (fallback) ---
+    google_key = (
+        os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("VIMAX_GOOGLE_API_KEY")
+    )
+    if google_key and not gcp_project:
+        # Only use API key if Vertex AI is not configured
+        chat_args = config.get("chat_model", {}).get("init_args", {})
+        if not chat_args.get("api_key"):
+            chat_args["api_key"] = google_key
+            changed = True
+
+        img_args = config.get("image_generator", {}).get("init_args", {})
+        if not img_args.get("api_key"):
+            img_args["api_key"] = google_key
+            changed = True
+
+        vid_args = config.get("video_generator", {}).get("init_args", {})
+        if not vid_args.get("api_key"):
+            vid_args["api_key"] = google_key
+            changed = True
+
+    # --- Legacy OpenRouter support ---
     chat_key = (
         os.environ.get("VIMAX_CHAT_API_KEY")
         or os.environ.get("OPENROUTER_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
     )
-    if chat_key and not config.get("chat_model", {}).get("init_args", {}).get("api_key"):
-        config["chat_model"]["init_args"]["api_key"] = chat_key
-        changed = True
-
-    # --- Google API key (for image + video generators) ---
-    google_key = os.environ.get("VIMAX_GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if google_key:
-        if not config.get("image_generator", {}).get("init_args", {}).get("api_key"):
-            config["image_generator"]["init_args"]["api_key"] = google_key
-            changed = True
-        if not config.get("video_generator", {}).get("init_args", {}).get("api_key"):
-            config["video_generator"]["init_args"]["api_key"] = google_key
+    if chat_key and not gcp_project:
+        chat_args = config.get("chat_model", {}).get("init_args", {})
+        if not chat_args.get("api_key"):
+            chat_args["api_key"] = chat_key
             changed = True
 
     if changed:
         # Write back so the pipeline picks it up
         with open(CONFIG_PATH, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
-        logger.info("Injected API keys from environment variables into config.")
+        logger.info("Injected API credentials from environment variables into config.")
 
 
 # ---------------------------------------------------------------------------
@@ -229,15 +281,16 @@ async def run_script2video(job_id: str, script: str, user_requirement: str, styl
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Cloud Run."""
-    return {"status": "healthy", "service": "vimax-api"}
+    return {"status": "healthy", "service": "visualiser-api"}
 
 
 @app.get("/")
 async def root():
     """Root endpoint with API info."""
     return {
-        "service": "ViMax API",
-        "version": "0.1.0",
+        "service": "Visualiser API",
+        "version": "0.2.0",
+        "provider": "Vertex AI" if os.environ.get("GOOGLE_CLOUD_PROJECT") else "Google AI Studio",
         "endpoints": {
             "POST /idea2video": "Submit an idea to generate a video",
             "POST /script2video": "Submit a script to generate a video",
@@ -245,7 +298,7 @@ async def root():
             "GET /jobs": "List all jobs",
             "GET /download/{job_id}": "Download the generated video",
             "GET /health": "Health check",
-        }
+        },
     }
 
 
@@ -352,7 +405,7 @@ async def download_video(job_id: str):
     return FileResponse(
         video_path,
         media_type="video/mp4",
-        filename=f"vimax_{job_id}.mp4",
+        filename=f"visualiser_{job_id}.mp4",
     )
 
 

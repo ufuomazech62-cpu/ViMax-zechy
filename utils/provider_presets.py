@@ -2,8 +2,8 @@
 Provider preset system for ViMax chat model configuration.
 
 Supports auto-detection and resolution of LLM provider settings,
-allowing users to specify a provider name (e.g., ``minimax``) instead
-of manually configuring base_url and model details.
+allowing users to specify a provider name (e.g., ``google_vertexai``)
+instead of manually configuring base_url and model details.
 """
 
 import os
@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
+    "google_vertexai": {
+        "env_project": "GOOGLE_CLOUD_PROJECT",
+        "env_location": "GOOGLE_CLOUD_LOCATION",
+        "default_model": "gemini-3.1-flash",
+        "models": [
+            "gemini-3.1-flash",
+            "gemini-3.1-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        ],
+        "temperature_range": (0.0, 2.0),
+    },
     "google_genai": {
         "env_key": "GOOGLE_API_KEY",
         "default_model": "gemini-2.5-flash",
@@ -46,15 +58,16 @@ PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
 def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve provider presets and return final ``init_chat_model`` kwargs.
 
-    If ``model_provider`` matches a known preset (e.g. ``google_genai``,
-    ``minimax``), the returned dict will have:
+    For ``google_vertexai``: injects ``project`` and ``location`` from env vars,
+    keeps ``model_provider`` as ``"google_vertexai"`` so LangChain uses
+    ``ChatVertexAI``.
 
-    * ``api_key`` sourced from the environment when not already set
-    * ``model`` defaulted to the preset's default model when not already set
-    * ``temperature`` clamped to the provider's supported range
-    * ``model_provider`` kept as-is for native LangChain providers
-      (e.g. ``google_genai``) or rewritten to ``"openai"`` for
-      OpenAI-compatible providers (e.g. ``minimax``)
+    For ``google_genai``: injects ``api_key`` from env var, keeps
+    ``model_provider`` as ``"google_genai"`` so LangChain uses
+    ``ChatGoogleGenerativeAI``.
+
+    For ``minimax`` and other OpenAI-compatible providers: rewrites
+    ``model_provider`` to ``"openai"`` and fills ``base_url``.
 
     For unknown providers the dict is returned unchanged.
     """
@@ -65,17 +78,45 @@ def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
     if preset is None:
         return args
 
-    # base_url (only for OpenAI-compatible providers)
+    # --- Vertex AI: project + location (no api_key needed on Cloud Run) ---
+    if provider == "google_vertexai":
+        if not args.get("project"):
+            env_project = preset.get("env_project", "")
+            env_val = os.environ.get(env_project, "")
+            if env_val:
+                args["project"] = env_val
+                logger.info("Using Vertex AI project from %s", env_project)
+        if not args.get("location"):
+            env_location = preset.get("env_location", "")
+            env_val = os.environ.get(env_location, "us-central1")
+            if env_val:
+                args["location"] = env_val
+                logger.info("Using Vertex AI location %s", env_val)
+        # Remove empty strings so LangChain doesn't choke
+        if not args.get("project"):
+            args.pop("project", None)
+        if not args.get("location"):
+            args.pop("location", None)
+
+    # --- Google AI Studio: api_key ---
+    if provider == "google_genai":
+        if not args.get("api_key"):
+            env_key = preset.get("env_key", "")
+            env_val = os.environ.get(env_key, "")
+            if env_val:
+                args["api_key"] = env_val
+                logger.info("Using Google AI key from %s", env_key)
+
+    # --- OpenAI-compatible: base_url + api_key ---
     if preset.get("base_url") and not args.get("base_url"):
         args["base_url"] = preset["base_url"]
-
-    # api_key – fall back to env var
-    if not args.get("api_key"):
-        env_key = preset.get("env_key", "")
-        env_val = os.environ.get(env_key, "")
-        if env_val:
-            args["api_key"] = env_val
-            logger.info("Using %s API key from environment variable %s", provider, env_key)
+    if preset.get("env_key") and provider not in ("google_vertexai", "google_genai"):
+        if not args.get("api_key"):
+            env_key = preset.get("env_key", "")
+            env_val = os.environ.get(env_key, "")
+            if env_val:
+                args["api_key"] = env_val
+                logger.info("Using %s API key from %s", provider, env_key)
 
     # default model
     if not args.get("model"):
@@ -95,7 +136,7 @@ def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Only rewrite to openai-compatible for providers that need it.
-    # Native LangChain providers (google_genai) are kept as-is.
+    # Native LangChain providers are kept as-is.
     if preset.get("base_url"):
         args["model_provider"] = "openai"
 
@@ -103,13 +144,18 @@ def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def detect_provider_from_env() -> Optional[str]:
-    """Return the name of a provider whose API key is found in the environment.
+    """Return the name of a provider whose credentials are found in the environment.
 
     Checks ``PROVIDER_PRESETS`` in definition order and returns the first
-    match, or ``None`` if no key is set.
+    match, or ``None`` if no credentials are set.
     """
     for name, preset in PROVIDER_PRESETS.items():
-        env_key = preset.get("env_key", "")
-        if env_key and os.environ.get(env_key):
-            return name
+        if name == "google_vertexai":
+            env_project = preset.get("env_project", "")
+            if env_project and os.environ.get(env_project):
+                return name
+        else:
+            env_key = preset.get("env_key", "")
+            if env_key and os.environ.get(env_key):
+                return name
     return None

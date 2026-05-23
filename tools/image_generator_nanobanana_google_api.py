@@ -1,6 +1,7 @@
 # https://ai.google.dev/gemini-api/docs/image-generation
 
 import logging
+import os
 import asyncio
 from PIL import Image
 from typing import List, Optional
@@ -16,14 +17,50 @@ from utils.rate_limiter import RateLimiter
 class ImageGeneratorNanobananaGoogleAPI:
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
+        project: str = "",
+        location: str = "",
+        model: str = "gemini-2.5-flash-image",
         rate_limiter: Optional[RateLimiter] = None,
     ):
-        self.model = "gemini-2.5-flash-image"
+        self.model = model
         self.rate_limiter = rate_limiter
-        self.client = genai.Client(
-            api_key=api_key,
-        )
+
+        # Prefer Vertex AI when project is provided; fall back to API key
+        if project:
+            client_kwargs = {
+                "project": project,
+                "location": location or "us-central1",
+            }
+            logging.info(
+                "Image gen: using Vertex AI (project=%s, location=%s)",
+                project, client_kwargs["location"],
+            )
+        else:
+            env_project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+            env_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+            env_key = os.environ.get("GOOGLE_API_KEY", "") or api_key
+
+            if env_project:
+                client_kwargs = {
+                    "project": env_project,
+                    "location": env_location,
+                }
+                logging.info(
+                    "Image gen: using Vertex AI from env (project=%s, location=%s)",
+                    env_project, env_location,
+                )
+            elif env_key:
+                client_kwargs = {"api_key": env_key}
+                logging.info("Image gen: using Google AI Studio API key")
+            else:
+                raise ValueError(
+                    "No Vertex AI project or Google API key configured. "
+                    "Set GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION for Vertex AI, "
+                    "or GOOGLE_API_KEY for AI Studio."
+                )
+
+        self.client = genai.Client(**client_kwargs)
 
     @retry(stop=stop_after_attempt(3), after=after_func)
     async def generate_single_image(
@@ -84,4 +121,3 @@ class ImageGeneratorNanobananaGoogleAPI:
             raise ValueError("No image generated")
 
         return ImageOutput(fmt="pil", ext="png", data=image)
-
