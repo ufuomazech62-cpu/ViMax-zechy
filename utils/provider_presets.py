@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
+    "google_genai": {
+        "env_key": "GOOGLE_API_KEY",
+        "default_model": "gemini-2.5-flash",
+        "models": [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+        ],
+        "temperature_range": (0.0, 2.0),
+    },
     "minimax": {
         "base_url": "https://api.minimax.io/v1",
         "env_key": "MINIMAX_API_KEY",
@@ -35,14 +46,15 @@ PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
 def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve provider presets and return final ``init_chat_model`` kwargs.
 
-    If ``model_provider`` matches a known preset (e.g. ``minimax``), the
-    returned dict will have:
+    If ``model_provider`` matches a known preset (e.g. ``google_genai``,
+    ``minimax``), the returned dict will have:
 
-    * ``model_provider`` rewritten to ``"openai"`` (OpenAI-compatible API)
-    * ``base_url`` filled in from the preset when not already set
     * ``api_key`` sourced from the environment when not already set
     * ``model`` defaulted to the preset's default model when not already set
     * ``temperature`` clamped to the provider's supported range
+    * ``model_provider`` kept as-is for native LangChain providers
+      (e.g. ``google_genai``) or rewritten to ``"openai"`` for
+      OpenAI-compatible providers (e.g. ``minimax``)
 
     For unknown providers the dict is returned unchanged.
     """
@@ -53,8 +65,8 @@ def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
     if preset is None:
         return args
 
-    # base_url
-    if not args.get("base_url"):
+    # base_url (only for OpenAI-compatible providers)
+    if preset.get("base_url") and not args.get("base_url"):
         args["base_url"] = preset["base_url"]
 
     # api_key – fall back to env var
@@ -82,8 +94,10 @@ def resolve_chat_model_config(init_args: Dict[str, Any]) -> Dict[str, Any]:
                 original, args["temperature"], provider,
             )
 
-    # rewrite to openai-compatible provider for LangChain
-    args["model_provider"] = "openai"
+    # Only rewrite to openai-compatible for providers that need it.
+    # Native LangChain providers (google_genai) are kept as-is.
+    if preset.get("base_url"):
+        args["model_provider"] = "openai"
 
     return args
 

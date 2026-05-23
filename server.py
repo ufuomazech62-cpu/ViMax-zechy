@@ -54,12 +54,15 @@ async def lifespan(app: FastAPI):
         img_key = config.get("image_generator", {}).get("init_args", {}).get("api_key", "")
         vid_key = config.get("video_generator", {}).get("init_args", {}).get("api_key", "")
 
-        if not chat_key and not os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
-            logger.warning("⚠️  No chat model API key configured. Set VIMAX_CHAT_API_KEY env var.")
-        if not img_key and not os.environ.get("GOOGLE_API_KEY"):
-            logger.warning("⚠️  No image generator API key configured. Set VIMAX_GOOGLE_API_KEY env var.")
-        if not vid_key and not os.environ.get("GOOGLE_API_KEY"):
-            logger.warning("⚠️  No video generator API key configured. Set VIMAX_GOOGLE_API_KEY env var.")
+        # With google_genai provider, a single GOOGLE_API_KEY covers everything
+        has_google_key = bool(os.environ.get("GOOGLE_API_KEY"))
+
+        if not chat_key and not os.environ.get("OPENROUTER_API_KEY") and not has_google_key:
+            logger.warning("⚠️  No chat model API key configured. Set GOOGLE_API_KEY env var.")
+        if not img_key and not has_google_key:
+            logger.warning("⚠️  No image generator API key configured. Set GOOGLE_API_KEY env var.")
+        if not vid_key and not has_google_key:
+            logger.warning("⚠️  No video generator API key configured. Set GOOGLE_API_KEY env var.")
     except Exception as e:
         logger.warning(f"Could not read config at startup: {e}")
 
@@ -117,7 +120,13 @@ def get_pipeline(config_path: str = None):
 
 
 def inject_env_api_keys():
-    """Inject API keys from environment variables into the config at runtime."""
+    """Inject API keys from environment variables into the config at runtime.
+
+    With the switch to Google Genai for chat, all three services (chat, image,
+    video) can share a single GOOGLE_API_KEY. The function still supports the
+    legacy VIMAX_CHAT_API_KEY / OPENROUTER_API_KEY env vars for backward
+    compatibility.
+    """
     import yaml
 
     # Read the config
@@ -126,13 +135,18 @@ def inject_env_api_keys():
 
     changed = False
 
-    # Chat model API key
-    chat_key = os.environ.get("VIMAX_CHAT_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    # --- Chat model API key ---
+    # Priority: VIMAX_CHAT_API_KEY > OPENROUTER_API_KEY > GOOGLE_API_KEY
+    chat_key = (
+        os.environ.get("VIMAX_CHAT_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+    )
     if chat_key and not config.get("chat_model", {}).get("init_args", {}).get("api_key"):
         config["chat_model"]["init_args"]["api_key"] = chat_key
         changed = True
 
-    # Google API key (for image + video generators)
+    # --- Google API key (for image + video generators) ---
     google_key = os.environ.get("VIMAX_GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if google_key:
         if not config.get("image_generator", {}).get("init_args", {}).get("api_key"):

@@ -1,9 +1,8 @@
 chat_model:
   init_args:
-    model: google/gemini-2.5-flash-lite-preview-09-2025
-    model_provider: openai
+    model: gemini-2.5-flash
+    model_provider: google_genai
     api_key:
-    base_url: https://openrouter.ai/api/v1
   # Rate limits for chat model API calls
   # Set to null to disable rate limiting for this service
   max_requests_per_minute: 500
