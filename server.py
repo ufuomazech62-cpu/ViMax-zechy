@@ -1,11 +1,11 @@
 """
-ViMax API Server for Cloud Run deployment.
+Visualiser API Server for Cloud Run deployment.
 
 Provides HTTP endpoints to submit video generation jobs,
 check their status, and download the results.
 
 Cloud Run requires a web server to handle requests — this wraps
-the ViMax pipeline behind a REST API.
+the Visualiser pipeline behind a REST API.
 """
 
 import os
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("vimax-server")
+logger = logging.getLogger("visualiser-server")
 
 # ---------------------------------------------------------------------------
 # Global state
@@ -31,7 +31,7 @@ jobs: dict = {}  # job_id -> job info dict
 pipeline = None  # Lazy-loaded pipeline instance
 
 # Config path — can be overridden via env var
-CONFIG_PATH = os.environ.get("VIMAX_CONFIG", "configs/idea2video.yaml")
+CONFIG_PATH = os.environ.get("VISUALISER_CONFIG", "configs/idea2video.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +39,9 @@ CONFIG_PATH = os.environ.get("VIMAX_CONFIG", "configs/idea2video.yaml")
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the ViMax pipeline on startup."""
+    """Initialize the Visualiser pipeline on startup."""
     global pipeline
-    logger.info("ViMax server starting up...")
+    logger.info("Visualiser server starting up...")
     logger.info(f"Config path: {CONFIG_PATH}")
 
     # Check if credentials are configured
@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Could not read config at startup: {e}")
 
     yield
-    logger.info("ViMax server shutting down...")
+    logger.info("Visualiser server shutting down...")
 
 
 app = FastAPI(
